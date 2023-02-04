@@ -26,9 +26,9 @@ html {
 body {
 	margin: 0;
 	padding: 0;
+	background-color: #ffffff;
 	max-width: 100%;
 	overflow-x: hidden;
-
 }
 
 h1,h2,h3,h4,h5,h6 {
@@ -98,7 +98,6 @@ p.small.last, #team p.small.last, #credits p.small.last {
 	position: relative;
 	max-width: 1140px;
 	margin: 0 auto;
-
 }
 
 /*--- SECTION ---*/
@@ -119,7 +118,7 @@ p.small.last, #team p.small.last, #credits p.small.last {
 
 .headlineContainer {
 	flex: 1 0 56px;
-	border-right: 1px solid #FFFFFF;
+	border-right: 1px solid #000000;
 }
 #footer .headlineContainer {
 	flex: 1 0 57px;
@@ -184,7 +183,6 @@ p.small.last, #team p.small.last, #credits p.small.last {
 	padding: 0 0.5rem;
 	overflow: hidden;
 	word-break: break-word;
-	
 }
 #section-header .contentContainer {
 	padding: 0;
@@ -197,7 +195,7 @@ p.small.last, #team p.small.last, #credits p.small.last {
 }
 .section-last .contentContainer {
 	padding-bottom: 0.8rem;
-	border-bottom: 1px solid #FFFFFF;
+	border-bottom: 1px solid #000000;
 }
 
 /*--- PROJECT BUTTONS ---*/
@@ -329,7 +327,7 @@ p.small.last, #team p.small.last, #credits p.small.last {
 	position: absolute;
 	height: 100%;
 	width: 1px;
-	background-color: #FFFFFF;
+	background-color: #000000;
 	top: 0;
 	right: 0;
 	display: none;
@@ -505,7 +503,35 @@ canvas {
 
 a, a:hover {
 	text-decoration: none;
-  color:grey;}
+}
 
+.socialbtns, .socialbtns ul, .socialbtns li {
+  margin: 0;
+  padding: 50px;
+}
+
+.socialbtns li {
+    list-style: none outside none;
+    display: inline-block;
+}
+
+.socialbtns .fa {
+	width: 40px;
+    height: 28px;
+	color: #000;
+	background-color: #FFF;
+	border: 1px solid #000;
+	padding-top: 12px;
+	border-radius: 22px;
+	-moz-border-radius: 22px;
+	-webkit-border-radius: 22px;
+	-o-border-radius: 22px;
+}
+
+.socialbtns .fa:hover {
+	color: #ffffff;
+	background-color: #000;
+	border: 1px solid #000;
+}
 
 
