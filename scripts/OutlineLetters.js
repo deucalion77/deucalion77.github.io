@@ -1,330 +1,388 @@
-import * as THREE from 'threejs/three.module.js';;
+window.onload = init;
 
-export default class OutlineLetters {
+function init() {
+  var root = new THREERoot({
+    createCameraControls:!true,
+    antialias:((window.devicePixelRatio || 1) == 1),
+    fov:90
+  });
+  root.renderer.setClearColor(0x000000);
+  root.renderer.setPixelRatio(window.devicePixelRatio || 1);
+  root.camera.position.set(0, 0, 300);
 
-    constructor(font, message, size, shiftX, shiftY, shiftZ) {
+  var textAnimation = createTextAnimation();
+  root.scene.add(textAnimation);
 
-        this.shiftX = shiftX;
-        this.shiftY = shiftY;
-        this.shiftZ = shiftZ;
+  var light = new THREE.DirectionalLight();
+  light.position.set(0, 0, 1);
+  root.scene.add(light);
 
-        //Material
-        var color = 0x000000;
-        var lineMaterialBlack = new THREE.LineBasicMaterial({
-            color: color,
-            side: THREE.DoubleSide,
-            linewidth: 1.0
-        });
+  var tl = new TimelineMax({
+    repeat:-1,
+    repeatDelay:0.25,
+    yoyo:true
+  });
+  tl.fromTo(textAnimation, 8,
+    {animationProgress:0.0},
+    {animationProgress:0.8, ease:Power1.easeInOut},
+    0
+  );
+  tl.to(root.camera.position, 8, {z:-350, ease:Power1.easeInOut}, 0);
 
-        //Line Text Group
-        var lineText = new THREE.Object3D();
+  createTweenScrubber(tl);
+}
 
-        //Array storing StartPositions of Letters
-        this.startPositions = [];
+function createTextAnimation() {
+  var geometry = generateTextGeometry('DOWN THE DRAIN', {
+    size:14,
+    height:4,
+    font:'droid sans',
+    weight:'bold',
+    style:'normal',
+    curveSegments:24,
+    bevelSize:1,
+    bevelThickness:1,
+    bevelEnabled:true,
+    anchor:{x:0.5, y:0.5, z:0.5}
+  });
 
-        var shapes = font.generateShapes(message, size);
+  THREE.BAS.Utils.separateFaces(geometry);
 
-        //Compute Offset of all shapes combined
-        this.shapesGeometry = new THREE.ShapeBufferGeometry(shapes);
-        this.shapesGeometry.computeBoundingBox();
+  return new TextAnimation(geometry);
+}
 
-        this.xMiddle = - 0.5 * (this.shapesGeometry.boundingBox.max.x - this.shapesGeometry.boundingBox.min.x);
-        this.yMiddle = - 0.5 * (this.shapesGeometry.boundingBox.max.y - this.shapesGeometry.boundingBox.min.y);
+function generateTextGeometry(text, params) {
+  var geometry = new THREE.TextGeometry(text, params);
 
-        this.xMiddle = this.xMiddle + this.shiftX;
-        this.yMiddle = this.yMiddle + this.shiftY;
+  geometry.computeBoundingBox();
 
+  geometry.userData = {};
+  geometry.userData.size = {
+    width: geometry.boundingBox.max.x - geometry.boundingBox.min.x,
+    height: geometry.boundingBox.max.y - geometry.boundingBox.min.y,
+    depth: geometry.boundingBox.max.z - geometry.boundingBox.min.z
+  };
 
-        //Compute hole-shapes
-        var holeShapes = [];
-        for (var i = 0; i < shapes.length; i++) {
+  var anchorX = geometry.userData.size.width * -params.anchor.x;
+  var anchorY = geometry.userData.size.height * -params.anchor.y;
+  var anchorZ = geometry.userData.size.depth * -params.anchor.z;
+  var matrix = new THREE.Matrix4().makeTranslation(anchorX, anchorY, anchorZ);
 
-            var shape = shapes[i];
+  geometry.applyMatrix(matrix);
 
-            if (shape.holes && shape.holes.length > 0) {
+  return geometry;
+}
 
-                for (var j = 0; j < shape.holes.length; j++) {
+////////////////////
+// CLASSES
+////////////////////
 
-                    var hole = shape.holes[j];
-                    holeShapes.push(hole);
-                }
-            }
-        }
-        shapes.push.apply(shapes, holeShapes);
+function TextAnimation(textGeometry) {
+  var bufferGeometry = new THREE.BAS.ModelBufferGeometry(textGeometry);
 
+  var aAnimation = bufferGeometry.createAttribute('aAnimation', 2);
+  var aCentroid = bufferGeometry.createAttribute('aCentroid', 3);
+  var aControl0 = bufferGeometry.createAttribute('aControl0', 3);
+  var aControl1 = bufferGeometry.createAttribute('aControl1', 3);
+  var aEndPosition = bufferGeometry.createAttribute('aEndPosition', 3);
+  var aAxisAngle = bufferGeometry.createAttribute('aAxisAngle', 4);
 
-        for (var i = 0; i < shapes.length; i++) {
+  var faceCount = bufferGeometry.faceCount;
+  var i, i2, i3, i4, v;
+  var keys = ['a', 'b', 'c'];
+  var vDelay = new THREE.Vector3();
 
-            var shape = shapes[i];
-            var points = shape.getPoints();
+  var maxDelay = 0.0;
+  var minDuration = 1.0;
+  var maxDuration = 1.0;
+  var stretch = 0.0125;
+  var lengthFactor = 0.01;
+  var maxLength = textGeometry.boundingBox.max.length();
 
-            //Push First Point to Array again to close shapes 
-            if (shape.getPoints().length > 0) {
-                points.push(shape.getPoints()[0]);
-            }
+  this.animationDuration = maxDuration + maxDelay + stretch + lengthFactor * maxLength;
+  this._animationProgress = 0;
 
-            //Create Geometry
-            var geometry = new THREE.BufferGeometry().setFromPoints(points);
-            var lineMesh = new THREE.Line(geometry, lineMaterialBlack);
+  var distanceZ = -400;
 
-            // // Store original position
-            let bBox = new THREE.Box3().setFromObject(lineMesh);
-            let offset = new THREE.Vector3();
-            bBox.getCenter(offset);
+  var axis = new THREE.Vector3();
+  var angle;
 
-            // // Center geometry faces
-            geometry.center();
+  for (i = 0, i2 = 0, i3 = 0, i4 = 0; i < faceCount; i++, i2 += 6, i3 += 9, i4 += 12) {
+    var face = textGeometry.faces[i];
+    var centroid = THREE.BAS.Utils.computeCentroid(textGeometry, face);
 
-            // // // Add to pivot group
-            let pivot = new THREE.Object3D();
-            pivot.add(lineMesh);
+    // animation
+    var delay = centroid.length() * lengthFactor + Math.random() * maxDelay;
+    var duration = THREE.Math.randFloat(minDuration, maxDuration);
 
-            // // // Offset pivot group by original position
-            var pivotCenter = new THREE.Vector3();
-            pivotCenter.addVectors(offset, new THREE.Vector3(this.xMiddle, this.yMiddle, 0));
+    for (v = 0; v < 6; v += 2) {
+      var vertex = textGeometry.vertices[face[keys[v * 0.5]]];
+      var vertexDelay = vDelay.subVectors(centroid, vertex).length() * 0.0001;
 
-            // console.log("pivot Center: ", pivotCenter);
-
-            //Store StartPosition for animation
-            this.startPositions.push(new THREE.Vector3(pivotCenter.x, pivotCenter.y, pivotCenter.z));
-
-            pivot.position.set(pivotCenter.x, pivotCenter.y, pivotCenter.z);
-            pivot.name = message + "_" + i;
-            lineText.add(pivot);
-        }
-
-        this.lineText = lineText;
-        this.randomPositions = [];
-        this.randomRotations = [];
+      aAnimation.array[i2 + v    ] = delay + vertexDelay + stretch * Math.random();
+      aAnimation.array[i2 + v + 1] = duration;
     }
 
-
-    shiftLetters(x, y, z) {
-        for (var i = 0; i < this.lineText.children.length; i++) {
-            this.lineText.children[i].position.add(new THREE.Vector3(x, y, z));
-            this.startPositions[i].add(new THREE.Vector3(x, y, z));
-        }
-
-        this.shiftX = x;
-        this.shiftY = y;
-        this.shiftZ = z;
-
-        this.xMiddle = this.xMiddle + this.shiftX;
-        this.yMiddle = this.yMiddle + this.shiftY;
+    // centroid
+    for (v = 0; v < 9; v += 3) {
+      aCentroid.array[i3 + v    ] = centroid.x;
+      aCentroid.array[i3 + v + 1] = centroid.y;
+      aCentroid.array[i3 + v + 2] = centroid.z;
     }
 
-    calculateRandomAimingPositions(camera, wordYPos) {
-        var objectChilds = this.lineText.children;
-        var numberOfChildren = objectChilds.length;
+    // ctrl
+    var c0x = centroid.x * THREE.Math.randFloat(0.75, 1.0);
+    var c0y = centroid.y * THREE.Math.randFloat(0.75, 1.0);
+    var c0z = distanceZ * THREE.Math.randFloat(0.5, 0.75);
 
-        for (var i = 0; i < numberOfChildren; i++) {
+    var c1x = centroid.x * THREE.Math.randFloat(0.25, 0.5);
+    var c1y = centroid.y * THREE.Math.randFloat(0.25, 0.5);
+    var c1z = distanceZ * THREE.Math.randFloat(0.75, 1.0);
 
-            var randomZValue = 20 + Math.random() * 40;
+    for (v = 0; v < 9; v += 3) {
+      aControl0.array[i3 + v    ] = c0x;
+      aControl0.array[i3 + v + 1] = c0y;
+      aControl0.array[i3 + v + 2] = c0z;
 
-            var zValue = randomZValue;
-            var deltaZValue = camera.position.z - zValue;
-            var visBox = this.visibleBox(camera, deltaZValue);
-            var visBoxCornerPoints = this.cornerPoints(visBox, zValue);
-            // console.log("Half z clipping plane: ", visBoxCornerPoints);
-
-            //randomPositions.push(new THREE.Vector3(100 - Math.random()*200, 100 - Math.random()*200, 100 - Math.random()*200));
-            //randomPositions.push(new THREE.Vector3(150 - Math.random() * 300, 150 - Math.random() * 300, 200 - Math.random() * 400));
-
-            //randomPositions.push(randomAimingPoint(visBoxCornerPoints));
-
-            // var shiftedBBmin = new THREE.Vector3(this.shapesGeometry.boundingBox.min.x + this.xMiddle, this.shapesGeometry.boundingBox.min.y + this.yMiddle, this.shapesGeometry.boundingBox.min.z);
-            // var shiftedBBMax = new THREE.Vector3(this.shapesGeometry.boundingBox.max.x + this.xMiddle, this.shapesGeometry.boundingBox.max.y + this.yMiddle, this.shapesGeometry.boundingBox.max.z);
-
-            let bBox = new THREE.Box3().setFromObject(this.lineText);
-
-            var randomAimingPosition = this.randomAimingPointBasedOnStartPoint(visBoxCornerPoints, this.startPositions[i], bBox.min, bBox.max, wordYPos);
-            randomAimingPosition.multiplyScalar(Math.random() * .5 + 1);
-
-            this.randomPositions.push(randomAimingPosition);
-            this.randomRotations.push(new THREE.Vector3(2 - Math.random() * 4, 2 - Math.random() * 4, 2 - Math.random() * 4));
-        }
+      aControl1.array[i3 + v    ] = c1x;
+      aControl1.array[i3 + v + 1] = c1y;
+      aControl1.array[i3 + v + 2] = c1z;
     }
 
+    // end position
+    var x, y, z;
 
-    animateShapes(scrollPos) {
-        var textChilds = this.lineText.children;
+    x = 0;
+    y = 0;
+    z = distanceZ;
 
-        for (var i = 0; i < this.lineText.children.length; i++) {
-
-            // var lerpValue = scrollPos;
-            var lerpValue = Math.pow(scrollPos, 0.25);
-            if (scrollPos < 0) {
-                lerpValue = scrollPos;
-            }
-            // console.log("lVal", lerpValue);
-
-            //lerp position
-            var startPosition = this.startPositions[i];
-            var aimingPosition = this.randomPositions[i];
-            this.lineText.children[i].position.lerpVectors(startPosition, aimingPosition, lerpValue);
-
-            //lerp rotation
-            var aimingRotation = this.randomRotations[i];
-            textChilds[i].rotation.x = THREE.Math.lerp(0, aimingRotation.x * Math.PI * 2, lerpValue);
-            textChilds[i].rotation.y = THREE.Math.lerp(0, aimingRotation.y * Math.PI * 2, lerpValue);
-            textChilds[i].rotation.z = THREE.Math.lerp(0, aimingRotation.z * Math.PI * 2, lerpValue);
-        }
+    for (v = 0; v < 9; v += 3) {
+      aEndPosition.array[i3 + v    ] = x;
+      aEndPosition.array[i3 + v + 1] = y;
+      aEndPosition.array[i3 + v + 2] = z;
     }
 
-    ///Debug functions --> diplaying positions and directions
-    debugPositionsAndDirections(scene) {
-        var redMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        var greenMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-        var debugMaterialLineRed = new THREE.LineBasicMaterial({
-            color: 0x00ffff,
-            side: THREE.DoubleSide,
-            linewidth: 1.2
-        });
+    // axis angle
+    // axis.x = THREE.Math.randFloatSpread(0.25);
+    // axis.y = THREE.Math.randFloatSpread(0.25);
+    // axis.z = 1.0;
+    // axis.x = -centroid.x * 0.0001;
+    // axis.y = centroid.y * 0.0005;
+    axis.x = 0;
+    axis.y = 0;
+    axis.z = 1;
 
-        for (let point of this.randomPositions) {
-            var geometry = new THREE.SphereGeometry(1, 32, 32);
-            var sphere = new THREE.Mesh(geometry, redMaterial);
-            sphere.position.set(point.x, point.y, point.z);
-            scene.add(sphere);
-            //console.log("add sphere at: ", point);
-        }
+    axis.normalize();
 
-        for (let point of this.startPositions) {
-            var geometry = new THREE.SphereGeometry(1, 32, 32);
-            var sphere = new THREE.Mesh(geometry, greenMaterial);
-            sphere.position.set(point.x, point.y, point.z);
-            scene.add(sphere);
-            console.log("add sphere at: ", point);
-        }
+    angle = Math.PI * THREE.Math.randFloat(4, 6);
+    // angle = Math.PI * 4;
 
-        for (var i = 0; i < this.randomPositions.length; i++) {
-            var points = [];
-            points.push(this.startPositions[i]);
-            points.push(this.randomPositions[i]);
-            var geometry = new THREE.BufferGeometry().setFromPoints(points);
-            var line = new THREE.Line(geometry, debugMaterialLineRed);
-            scene.add(line);
-        }
+    for (v = 0; v < 12; v += 4) {
+      aAxisAngle.array[i4 + v    ] = axis.x;
+      aAxisAngle.array[i4 + v + 1] = axis.y;
+      aAxisAngle.array[i4 + v + 2] = axis.z;
+      aAxisAngle.array[i4 + v + 3] = angle;
+    }
+  }
+
+  var material = new THREE.BAS.PhongAnimationMaterial({
+      shading: THREE.FlatShading,
+      side: THREE.DoubleSide,
+      transparent: true,
+      uniforms: {
+        uTime: {type: 'f', value: 0}
+      },
+      shaderFunctions: [
+        THREE.BAS.ShaderChunk['cubic_bezier'],
+        THREE.BAS.ShaderChunk['ease_out_cubic'],
+        THREE.BAS.ShaderChunk['quaternion_rotation']
+      ],
+      shaderParameters: [
+        'uniform float uTime;',
+        'uniform vec3 uAxis;',
+        'uniform float uAngle;',
+        'attribute vec2 aAnimation;',
+        'attribute vec3 aCentroid;',
+        'attribute vec3 aControl0;',
+        'attribute vec3 aControl1;',
+        'attribute vec3 aEndPosition;',
+        'attribute vec4 aAxisAngle;'
+      ],
+      shaderVertexInit: [
+        'float tDelay = aAnimation.x;',
+        'float tDuration = aAnimation.y;',
+        'float tTime = clamp(uTime - tDelay, 0.0, tDuration);',
+        'float tProgress =  ease(tTime, 0.0, 1.0, tDuration);'
+         //'float tProgress = tTime / tDuration;'
+      ],
+      shaderTransformPosition: [
+        // 'transformed -= aCentroid;',
+        'transformed *= 1.0 - tProgress;',
+        // 'transformed += aCentroid;',
+
+        'transformed += cubicBezier(transformed, aControl0, aControl1, aEndPosition, tProgress);',
+        // 'transformed += aEndPosition * tProgress;'
+
+        'float angle = aAxisAngle.w * tProgress;',
+        'vec4 tQuat = quatFromAxisAngle(aAxisAngle.xyz, angle);',
+        'transformed = rotateVector(tQuat, transformed);'
+      ]
+    },
+    {
+      diffuse: 0xffffff
+    }
+  );
+
+  THREE.Mesh.call(this, bufferGeometry, material);
+
+  this.frustumCulled = false;
+}
+TextAnimation.prototype = Object.create(THREE.Mesh.prototype);
+TextAnimation.prototype.constructor = TextAnimation;
+
+Object.defineProperty(TextAnimation.prototype, 'animationProgress', {
+  get: function() {
+    return this._animationProgress;
+  },
+  set: function(v) {
+    this._animationProgress = v;
+    this.material.uniforms['uTime'].value = this.animationDuration * v;
+  }
+});
+
+function THREERoot(params) {
+  params = utils.extend({
+    fov:60,
+    zNear:1,
+    zFar:10000,
+
+    createCameraControls:true
+  }, params);
+
+  this.renderer = new THREE.WebGLRenderer({
+    antialias:params.antialias
+  });
+  this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  document.getElementById('three-container').appendChild(this.renderer.domElement);
+
+  this.camera = new THREE.PerspectiveCamera(
+    params.fov,
+    window.innerWidth / window.innerHeight,
+    params.zNear,
+    params.zfar
+  );
+
+  this.scene = new THREE.Scene();
+
+  if (params.createCameraControls) {
+    this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+  }
+
+  this.resize = this.resize.bind(this);
+  this.tick = this.tick.bind(this);
+
+  this.resize();
+  this.tick();
+
+  window.addEventListener('resize', this.resize, false);
+}
+THREERoot.prototype = {
+  tick: function() {
+    this.update();
+    this.render();
+    requestAnimationFrame(this.tick);
+  },
+  update: function() {
+    this.controls && this.controls.update();
+  },
+  render: function() {
+    this.renderer.render(this.scene, this.camera);
+  },
+  resize: function() {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+};
+
+////////////////////
+// UTILS
+////////////////////
+
+var utils = {
+  extend:function(dst, src) {
+    for (var key in src) {
+      dst[key] = src[key];
     }
 
-    debugBoundingBox(scene) {
-        var redMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        var magentaMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+    return dst;
+  },
+  randSign: function() {
+    return Math.random() > 0.5 ? 1 : -1;
+  }
+};
 
-        let bBox = new THREE.Box3().setFromObject(this.lineText);
-        let centerPoint = new THREE.Vector3();
-        bBox.getCenter(centerPoint);
+function createTweenScrubber(tween, seekSpeed) {
+  seekSpeed = seekSpeed || 0.001;
 
-        var geometry = new THREE.SphereGeometry(1, 32, 32);
-        var sphereBBMin = new THREE.Mesh(geometry, redMaterial);
-        var sphereBBMax = new THREE.Mesh(geometry, redMaterial);
+  function stop() {
+    TweenMax.to(tween, 2, {timeScale:0});
+  }
 
-        var sphereMiddle = new THREE.Mesh(geometry, magentaMaterial);
+  function resume() {
+    TweenMax.to(tween, 2, {timeScale:1});
+  }
 
-        sphereBBMin.position.set(bBox.min.x, bBox.min.y, bBox.min.z);
-        sphereBBMax.position.set(bBox.max.x, bBox.max.y, bBox.max.z);
+  function seek(dx) {
+    var progress = tween.progress();
+    var p = THREE.Math.clamp((progress + (dx * seekSpeed)), 0, 1);
 
-        sphereMiddle.position.set(centerPoint.x, centerPoint.y, centerPoint.z);
+    tween.progress(p);
+  }
 
-        scene.add(sphereBBMin);
-        scene.add(sphereBBMax);
+  var _cx = 0;
 
-        scene.add(sphereMiddle);
+  // desktop
+  var mouseDown = false;
+  document.body.style.cursor = 'pointer';
+
+  window.addEventListener('mousedown', function(e) {
+    mouseDown = true;
+    document.body.style.cursor = 'ew-resize';
+    _cx = e.clientX;
+    stop();
+  });
+  window.addEventListener('mouseup', function(e) {
+    mouseDown = false;
+    document.body.style.cursor = 'pointer';
+    resume();
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (mouseDown === true) {
+      var cx = e.clientX;
+      var dx = cx - _cx;
+      _cx = cx;
+
+      seek(dx);
     }
+  });
+  // mobile
+  window.addEventListener('touchstart', function(e) {
+    _cx = e.touches[0].clientX;
+    stop();
+    e.preventDefault();
+  });
+  window.addEventListener('touchend', function(e) {
+    resume();
+    e.preventDefault();
+  });
+  window.addEventListener('touchmove', function(e) {
+    var cx = e.touches[0].clientX;
+    var dx = cx - _cx;
+    _cx = cx;
 
-    getBoundingBox(){
-        let bBox = new THREE.Box3().setFromObject(this.lineText);
-        return bBox;
-    }
-
-
-    ///Helper functions --> Calculation of RandomPositions (animation aimig vectors) 
-
-    visibleBox(camera, z) {
-        var t = Math.tan(THREE.Math.degToRad(camera.fov) / 2)
-        var h = t * 2 * z;
-        var w = h * camera.aspect;
-        return new THREE.Box2(new THREE.Vector2(-w / 2, h / 2), new THREE.Vector2(w / 2, -h / 2));
-    }
-
-    cornerPoints(box2, z) {
-
-        var indent = 0;
-
-        var point1 = new THREE.Vector3(box2.min.x + indent, box2.min.y - indent, z);
-        var point2 = new THREE.Vector3(-box2.min.x - indent, box2.min.y - indent, z);
-        var point3 = new THREE.Vector3(box2.max.x - indent, box2.max.y + indent, z);
-        var point4 = new THREE.Vector3(-box2.max.x + indent, box2.max.y + indent, z);
-
-        var cornerPoints = [];
-        cornerPoints.push(point1);
-        cornerPoints.push(point2);
-        cornerPoints.push(point3);
-        cornerPoints.push(point4);
-
-        return cornerPoints;
-    }
-
-    randomAimingPointBasedOnStartPoint(cornerPoints, startPoint, bbMin, bbMax, wordYPos) {
-
-
-        var randomDirection = 0;
-        var halfOfWidth = (bbMax.x - bbMin.x) / 2;
-        //1. wordYPos, check where word is located (0 -> up, 1 -> middle, 2 -> down)
-        //2. randomDirection of shape movement based on wordYPos and shape x-pos
-        //   randomDirections: 0 -> top, 1 -> right, 2 -> down, 3 -> left
-        if (wordYPos == 0) {
-            //upper word -> randomDirection to top
-            randomDirection = 0;
-        }
-        else if (wordYPos == 1) {
-            //middle word -> randomDirection to left or right (based on x-Value)
-            if (startPoint.x <= bbMin.x + halfOfWidth) {
-                //-left
-                randomDirection = 3;
-            }
-            else {
-                //-right
-                randomDirection = 1;
-            }
-        }
-        else if (wordYPos == 2) {
-            //lower word -> randomDirection to down
-            randomDirection = 2;
-        }
-
-        //3. calculate random Point along given Side
-        var x = 0;
-        var y = 0;
-        var z = cornerPoints[0].z;
-
-        switch (randomDirection) {
-
-            case 0:
-                x = THREE.Math.lerp(cornerPoints[0].x, cornerPoints[1].x, Math.random());
-                y = cornerPoints[0].y;
-                break;
-            case 1:
-                x = cornerPoints[1].x;
-                y = THREE.Math.lerp(cornerPoints[1].y, cornerPoints[2].y, Math.random());
-                break;
-            case 2:
-                x = THREE.Math.lerp(cornerPoints[0].x, cornerPoints[1].x, Math.random());
-                y = cornerPoints[2].y;
-                break;
-            case 3:
-                x = cornerPoints[3].x;
-                y = THREE.Math.lerp(cornerPoints[1].y, cornerPoints[2].y, Math.random());
-                break;
-            default:
-                x = THREE.Math.lerp(cornerPoints[0].x, cornerPoints[1].x, Math.random());
-                y = cornerPoints[0].y;
-
-        }
-
-        return (new THREE.Vector3(x, y, z));
-    }
-
-
-
+    seek(dx);
+    e.preventDefault();
+  });
 }
